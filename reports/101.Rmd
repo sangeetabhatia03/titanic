@@ -1,0 +1,342 @@
+---
+output: 
+  pdf_document:
+    citation_package: natbib
+    keep_tex: true
+    fig_caption: true
+    latex_engine: pdflatex
+title: 
+author:
+- name: Sangeeta Bhatia
+  affiliation: Imperial College London
+abstract: 
+keywords: 
+date: "Y"
+geometry: margin=1in
+fontfamily: mathpazo
+fontsize: 11pt
+# spacing: double
+bibliography: 
+biblio-style: apsr
+endnote: no
+---
+Load in the packages we will use to explore the data set.
+
+```{r}
+
+library(ggplot2)
+library(dplyr)
+library(magrittr)
+
+```
+
+Load in the training data and inspect it.
+
+```{r}
+training <- here::here("data", "train.csv")  %>%
+            read.csv(na.strings = c("NA","NaN", " ", ""))
+
+```
+
+How many missing values do we have in each column?
+
+```{r}
+
+apply(training, 2, function(col) sum(is.na(col)))
+
+```
+Age and cabin variables are missing for a lot of rows (19% and 77%
+respectively) while Embarked is missing for only 2 passengers.
+
+## Factors influencing the rate of survival
+
+Let us fix the classes of the factors first.
+
+```{r}
+
+ 
+training$Survived %<>% factor
+training$Pclass %<>% factor
+training$Sex %<>% factor
+training$Age %<>% as.numeric
+training$Fare %<>% as.numeric
+```
+
+For the moment, I  will ignore the variables Name and Ticket as it is
+reasonable to assume that they will not be useful in predicting the survival.
+
+```{r}
+training_relevant <- select(training, -c(Name, Ticket))
+training_tall <- tidyr::gather(training_relevant,
+                               key = variable,
+                               value = "value", -c(PassengerId, Survived),
+                               factor_key = T)
+
+ggplot(training_tall, aes(Survived)) + geom_bar(position = 'dodge') + facet_wrap(~variable)
+
+```
+
+That's too coarse a view to tell me anything useful. I'll look at each
+variable separately to tease out the effect.
+
+## Passenger ticket class vs Survived 
+
+```{r}
+library(ggthemes)
+ggplot(training_relevant, aes(Survived, fill = Pclass)) +
+    geom_bar(position = 'dodge') + theme_tufte()
+
+```
+As expected, a lot more passengers with 3rd class tickets died. The
+effect on survival however is not so clear (the irony!).
+
+## Passenger sex  vs Survived 
+
+```{r}
+ggplot(training_relevant, aes(Survived, fill = Sex)) +
+    geom_bar(position = 'dodge') + theme_tufte()
+```
+
+A lot more males died, perhaps due to the policy of women and children
+first.
+
+## Passenger age vs Survived 
+```{r}
+survived <- filter(training_relevant,  Survived == 1)
+died <- filter(training_relevant, Survived == 0)
+
+ggplot(survived, aes(Age, fill = Survived)) +
+    geom_histogram(bins = 10, col = "grey") + theme_tufte() +
+    geom_histogram(data = died,
+                   aes(x = Age, y = -..count.., fill = Survived),
+                   bins = 10, col = "grey") 
+ 
+
+
+
+```
+
+The graph suggests that the survivors and victims have similar
+frequency distribution except for the fat left tail in survivors.
+
+
+## Number of siblings/spouses aboard the Titanic vs Survived 	
+
+```{r}
+
+ggplot() +
+    geom_bar(data = survived, aes(x = SibSp, y = ..count.., fill = Survived)) +
+    geom_bar(data = died, aes(x = SibSp, y = -..count.., fill = Survived)) +
+    theme_tufte()
+
+```
+Again, the graph suggests that this variable may not have a lot of
+predictive power.
+
+## Number of parents/children aboard the Titanic vs Survived 	
+
+```{r}
+
+ggplot() +
+    geom_bar(data = survived, aes(x = Parch, y = ..count.., fill = Survived)) +
+    geom_bar(data = died, aes(x = Parch, y = -..count.., fill = Survived)) +
+    theme_tufte()
+
+```
+
+## Fare vs Survived
+
+The fare a passenger paid serves as a proxy of their ticket
+class. Therefore one would expect that this variable would influence
+the survived status in a similar way.
+
+```{r}
+
+ggplot() +
+    geom_histogram(data = training_relevant,
+                   aes(x = Fare, y = ..count.., fill = Survived),
+                   bins = 10, col = "grey", position = 'dodge') + theme_tufte() 
+
+```
+
+Passengers who paid lower fare appear to be over-represented in the
+set of victims. 
+
+```{r}
+
+ggplot(training_relevant, aes(Pclass, Fare, color = Survived)) +
+    geom_boxplot() + theme_tufte()
+
+```
+
+So it appears that a passenger traveling on a 3rd class ticket was as
+likely to live as to die while someone traveling on a 1st class ticket
+had a better chance of surviving.
+
+## Port of Embarkation vs Survived
+
+```{r}
+
+ggplot() +
+    geom_bar(data = training_relevant,
+             aes(x = Embarked, y = ..count.., fill = Survived), position = 'dodge') +
+    theme_tufte()
+
+```
+Passengers embarking at Southampton appear to over-represented among
+the victims. The route of Titanic was
+Southampton-Cherbourg-Queenstown. Was there a relation between the
+port of embarkation and passenger class? Did more passengers in 3rd
+class board at one or other of these ports? 
+
+
+```{r}
+
+ggplot() +
+    geom_bar(data = training_relevant,
+             aes(x = Embarked, y = ..count.., fill = Pclass), position = 'dodge') +
+    theme_tufte()
+
+```
+That indeed appears to be the case! Then the port is essentially a
+proxy for class.
+
+# Prediction
+
+Before we can go ahead and build a model, we need to do something
+about the missing values, especially for the age variable.
+
+## Handling missing values
+
+
+
+```{r}
+missing   <- filter(training, is.na(Age))
+available <- filter(training, !is.na(Age))
+```
+
+Is there anything else in the data that could help us figure out age?
+Perhaps a combination of the passenger class and fare paid?
+
+```{r}
+
+ggplot(available, aes(Fare, Age)) + geom_point() +
+    facet_grid(Pclass~., scales = "free")  + geom_smooth(method = 'lm') +
+    theme_tufte()
+
+```
+
+That is not useful! Let us try with a combination of class and port.
+
+```{r}
+filter(available, !is.na(Embarked)) %>%
+ggplot(aes(Fare, Age)) + geom_point() +
+    facet_grid(Pclass~Embarked, scales = "free")  + geom_smooth(method = 'lm') +
+    theme_tufte()
+
+```
+That is marginally better. How about if we let of the class variable,
+counter-intuitive as that may be.
+
+```{r}
+filter(available, !is.na(Embarked)) %>%
+ggplot(aes(Fare, Age)) + geom_point() +
+    facet_grid(Embarked~., scales = "free")  + geom_smooth(method = 'lm') +
+    theme_tufte()
+
+```
+
+Nope! That's no good. The reason is that the fare has been averaged
+over each individual in a group. 
+
+# Imputing missing data - Sampling from the estimated density kernel.
+
+
+Since none of the variables are very helpful in informing the age of
+the passenger, we will estimate the kernel of the distribution of the
+age and draw samples from the estimated density to replace missing 
+values.  See the answer [here](https://tinyurl.com/y9qtge2n).
+
+```{r}
+age_density <- density(training$Age, na.rm = TRUE)
+
+age_na <- which(is.na(training$Age))
+N <- length(age_na)
+bw <- age_density$bw
+age_nna <- filter(training, !is.na(Age)) %>% pull(Age)
+means <- sample(age_nna, replace = TRUE)
+training$Age[age_na] <- rnorm(N, mean = means, sd = bw)
+
+
+
+
+```
+
+
+
+## Multivariate regression
+
+```{r}
+
+model1 <- glm(formula = Survived ~ Pclass + Sex + Age,
+              family = binomial(link = "logit"), 
+              data = training)
+
+```
+
+## Test 
+
+Read in the test data and do prediction.
+```{r}
+
+test <- here::here("data", "test.csv") %>% read.csv
+
+test$Pclass %<>% factor
+test$Sex %<>% factor
+test$Age %<>% as.numeric
+test$Fare %<>% as.numeric
+```
+First, let us check as before if the test data set has any missing
+values.
+
+```{r}
+
+apply(test, 2, function(col) sum(is.na(col)))
+
+```
+So one if the key variables Age, has a lot of missing values. Before
+we fit our model to the test data, let us fill in the missing values
+as before.
+
+```{r}
+
+age_density <- density(test$Age, na.rm = TRUE)
+
+age_na <- which(is.na(test$Age))
+N  <- length(age_na)
+bw <- age_density$bw
+age_nna <- filter(test, !is.na(Age)) %>% pull(Age)
+means <- sample(age_nna, replace = TRUE)
+test$Age[age_na] <- rnorm(N, mean = means, sd = bw)
+
+
+```
+And now, fit the model.
+
+```{r}
+fitted.results <- predict(model1, newdata = test,
+                          type = 'response')
+
+survived <- ifelse(fitted.results > 0.5,1,0)
+
+submission <- data.frame(PassengerId = test$PassengerId,
+                         Survived = survived)
+
+write.csv(submission, file = "submission.csv", row.names = F, quote = F)
+
+```
+
+This improves my submission over the previous entry where I just
+inserted random 0s and 1s for missing values.
+
+![Submission 2 to kaggle.](kaggle-submission-2.png)
